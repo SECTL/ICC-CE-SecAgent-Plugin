@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "8Lux1GTuS3A=",
+  "success": true,
+  "projectFilePath": "D:\\Code\\SecAgentAll\\ICC-CE-SecAgent-Plugin\\ICC-CE.SecAgent.Plugin.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\PANDA-JSR\\.nuget\\packages\\microsoft.netcore.app.ref\\6.0.36\\microsoft.netcore.app.ref.6.0.36.nupkg.sha512",
+    "C:\\Users\\PANDA-JSR\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\6.0.36\\microsoft.windowsdesktop.app.ref.6.0.36.nupkg.sha512",
+    "C:\\Users\\PANDA-JSR\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\6.0.36\\microsoft.aspnetcore.app.ref.6.0.36.nupkg.sha512",
+    "C:\\Users\\PANDA-JSR\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.55\\microsoft.windows.sdk.net.ref.10.0.19041.55.nupkg.sha512"
+  ],
+  "logs": []
+}

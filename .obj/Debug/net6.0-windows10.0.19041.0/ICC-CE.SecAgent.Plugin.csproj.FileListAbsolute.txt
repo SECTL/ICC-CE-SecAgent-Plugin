@@ -1,0 +1,16 @@
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.csproj.AssemblyReference.cache
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.GeneratedMSBuildEditorConfig.editorconfig
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.AssemblyInfoInputs.cache
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.AssemblyInfo.cs
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.csproj.CoreCompileInputs.cache
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\manifest.json
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\README.md
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\skills\iccce\SETTINGS_REFERENCE.md
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\skills\iccce\SKILL.md
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.deps.json
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.dll
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\bin\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.pdb
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.dll
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\refint\ICC-CE.SecAgent.Plugin.dll
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ICC-CE.SecAgent.Plugin.pdb
+D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\ref\ICC-CE.SecAgent.Plugin.dll

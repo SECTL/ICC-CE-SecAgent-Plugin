@@ -1,4 +1,0 @@
-D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\InkCanvas.PluginSdk.csproj.AssemblyReference.cache
-D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\InkCanvas.PluginSdk.GeneratedMSBuildEditorConfig.editorconfig
-D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\InkCanvas.PluginSdk.csproj.CoreCompileInputs.cache
-D:\Code\SecAgentAll\ICC-CE-SecAgent-Plugin\.obj\Debug\net6.0-windows10.0.19041.0\InkCanvas.PluginSdk.sourcelink.json

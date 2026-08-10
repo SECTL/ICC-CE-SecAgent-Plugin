@@ -2,6 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net6.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -10,6 +11,7 @@
     <RootNamespace>Ink_Canvas.SecAgent.Plugin</RootNamespace>
     <LangVersion>11.0</LangVersion>
     <Platforms>AnyCPU;x86;x64</Platforms>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/obj-build/**;**/bin-build/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

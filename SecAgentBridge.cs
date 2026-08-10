@@ -15,10 +15,17 @@ internal sealed class SecAgentBridge : IDisposable
     private const string ListPathsTool = "list_iccce_setting_paths";
     private const string ReadSettingsTool = "read_iccce_settings";
     private const string UpdateSettingsTool = "update_iccce_settings";
+    private const string CurrentScreenshotTool = "get_iccce_current_screenshot";
+    private const string WhiteboardScreenshotTool = "get_iccce_whiteboard_screenshot";
+    private const string WhiteboardStatusTool = "get_iccce_whiteboard_status";
+    private const string SwitchWhiteboardPageTool = "switch_iccce_whiteboard_page";
+    private const string AddWhiteboardPageTool = "add_iccce_whiteboard_page";
+    private const string DeleteWhiteboardPageTool = "delete_iccce_whiteboard_page";
 
     private readonly HttpListener _listener = new();
     private readonly IPluginHost _host;
     private readonly SettingsBridge _settings = new();
+    private readonly IccceVisualBridge _visuals = new();
     private CancellationTokenSource _cts;
 
     public SecAgentBridge(IPluginHost host) => _host = host;
@@ -74,7 +81,7 @@ internal sealed class SecAgentBridge : IDisposable
             {
                 var name = Uri.UnescapeDataString(path["/tools/".Length..]);
                 using var document = await JsonDocument.ParseAsync(context.Request.InputStream, cancellationToken: cancellationToken);
-                var result = CallTool(name, document.RootElement);
+                var result = await CallToolAsync(name, document.RootElement);
                 await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = true, ["result"] = result }, cancellationToken);
                 return;
             }
@@ -100,7 +107,13 @@ internal sealed class SecAgentBridge : IDisposable
         Tool(VersionTool, "获取 ICC-CE 当前版本、配置路径和运行状态。", EmptySchema()),
         Tool(ListPathsTool, "列出 ICC-CE 可读写设置路径；可用 prefix 缩小范围。", PrefixSchema()),
         Tool(ReadSettingsTool, "读取 ICC-CE Settings.json 或指定设置路径；默认隐藏敏感值。", ReadSchema()),
-        Tool(UpdateSettingsTool, "安全更新 ICC-CE 设置；更新前必须先读取目标字段。", UpdateSchema()));
+        Tool(UpdateSettingsTool, "安全更新 ICC-CE 设置；更新前必须先读取目标字段。", UpdateSchema()),
+        Tool(CurrentScreenshotTool, "获取 ICC-CE 当前墨迹截图，可选择是否包含屏幕背景。", ScreenshotSchema()),
+        Tool(WhiteboardScreenshotTool, "获取指定 ICC-CE 白板页的墨迹截图，可选择是否包含屏幕背景。", WhiteboardScreenshotSchema()),
+        Tool(WhiteboardStatusTool, "获取 ICC-CE 白板当前页、总页数和可用操作。", EmptySchema()),
+        Tool(SwitchWhiteboardPageTool, "切换 ICC-CE 白板当前页，页码从 1 开始。", PageSchema()),
+        Tool(AddWhiteboardPageTool, "在当前页后新增一个 ICC-CE 白板页。", EmptySchema()),
+        Tool(DeleteWhiteboardPageTool, "删除 ICC-CE 白板当前页，至少保留一页。", EmptySchema()));
 
     private static JsonObject Tool(string name, string description, JsonObject schema) => new()
     {
@@ -145,18 +158,66 @@ internal sealed class SecAgentBridge : IDisposable
             new JsonObject { ["required"] = new JsonArray("path", "value") })
     };
 
-    private JsonNode CallTool(string name, JsonElement arguments) => name switch
+    private static JsonObject ScreenshotSchema() => new()
     {
-        VersionTool => _settings.VersionStatus(),
-        ListPathsTool => _settings.ListPaths(ReadString(arguments, "prefix")),
-        ReadSettingsTool => _settings.Read(ReadString(arguments, "path"), false),
-        UpdateSettingsTool => _settings.Update(arguments),
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["include_screen_background"] = new JsonObject { ["type"] = "boolean", ["default"] = false, ["description"] = "false 仅返回透明墨迹层，true 返回桌面背景叠加墨迹" }
+        },
+        ["additionalProperties"] = false
+    };
+
+    private static JsonObject WhiteboardScreenshotSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["page"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["description"] = "可选，1 开始的白板页码；省略时使用当前页" },
+            ["include_screen_background"] = new JsonObject { ["type"] = "boolean", ["default"] = false, ["description"] = "false 仅返回透明墨迹层，true 返回桌面背景叠加墨迹" }
+        },
+        ["additionalProperties"] = false
+    };
+
+    private static JsonObject PageSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["page"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["description"] = "1 开始的白板页码" }
+        },
+        ["required"] = new JsonArray("page"),
+        ["additionalProperties"] = false
+    };
+
+    private Task<JsonNode> CallToolAsync(string name, JsonElement arguments) => name switch
+    {
+        VersionTool => Task.FromResult<JsonNode>(_settings.VersionStatus()),
+        ListPathsTool => Task.FromResult<JsonNode>(_settings.ListPaths(ReadString(arguments, "prefix"))),
+        ReadSettingsTool => Task.FromResult<JsonNode>(_settings.Read(ReadString(arguments, "path"), false)),
+        UpdateSettingsTool => Task.FromResult<JsonNode>(_settings.Update(arguments)),
+        CurrentScreenshotTool => _visuals.GetCurrentScreenshotAsync(ReadBool(arguments, "include_screen_background")),
+        WhiteboardScreenshotTool => _visuals.GetWhiteboardScreenshotAsync(ReadNullableInt(arguments, "page"), ReadBool(arguments, "include_screen_background")),
+        WhiteboardStatusTool => _visuals.GetWhiteboardStatusAsync(),
+        SwitchWhiteboardPageTool => _visuals.SwitchWhiteboardPageAsync(ReadRequiredInt(arguments, "page")),
+        AddWhiteboardPageTool => _visuals.AddWhiteboardPageAsync(),
+        DeleteWhiteboardPageTool => _visuals.DeleteWhiteboardPageAsync(),
         _ => throw new ArgumentException($"未知工具：{name}")
     };
 
     private static string ReadString(JsonElement args, string name) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() : "";
+
+    private static bool ReadBool(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True && value.GetBoolean();
+
+    private static int? ReadNullableInt(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
+            ? number : null;
+
+    private static int ReadRequiredInt(JsonElement args, string name) =>
+        ReadNullableInt(args, name) ?? throw new ArgumentException($"缺少整数参数：{name}");
 
     public void Dispose()
     {

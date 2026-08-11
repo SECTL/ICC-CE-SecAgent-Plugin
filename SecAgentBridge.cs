@@ -21,6 +21,7 @@ internal sealed class SecAgentBridge : IDisposable
     private const string SwitchWhiteboardPageTool = "switch_iccce_whiteboard_page";
     private const string AddWhiteboardPageTool = "add_iccce_whiteboard_page";
     private const string DeleteWhiteboardPageTool = "delete_iccce_whiteboard_page";
+    private const string InsertSvgTool = "insert_iccce_svg";
 
     private readonly HttpListener _listener = new();
     private readonly IPluginHost _host;
@@ -104,6 +105,7 @@ internal sealed class SecAgentBridge : IDisposable
     }
 
     private static JsonArray Tools() => new(
+        Tool(InsertSvgTool, "向当前白板插入一个 SVG 元素，插入后默认选中，可移动、等比例缩放和删除。", InsertSvgSchema()),
         Tool(VersionTool, "获取 ICC-CE 当前版本、配置路径和运行状态。", EmptySchema()),
         Tool(ListPathsTool, "列出 ICC-CE 可读写设置路径；可用 prefix 缩小范围。", PrefixSchema()),
         Tool(ReadSettingsTool, "读取 ICC-CE Settings.json 或指定设置路径；默认隐藏敏感值。", ReadSchema()),
@@ -190,6 +192,20 @@ internal sealed class SecAgentBridge : IDisposable
         ["additionalProperties"] = false
     };
 
+    private static JsonObject InsertSvgSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["svg"] = new JsonObject { ["type"] = "string", ["description"] = "完整 SVG 字符串。" },
+            ["name"] = new JsonObject { ["type"] = "string", ["description"] = "可选的元素名称。" },
+            ["width"] = new JsonObject { ["type"] = "number", ["minimum"] = 160, ["maximum"] = 1800 },
+            ["height"] = new JsonObject { ["type"] = "number", ["minimum"] = 100, ["maximum"] = 1400 }
+        },
+        ["required"] = new JsonArray("svg"),
+        ["additionalProperties"] = false
+    };
+
     private Task<JsonNode> CallToolAsync(string name, JsonElement arguments) => name switch
     {
         VersionTool => Task.FromResult<JsonNode>(_settings.VersionStatus()),
@@ -202,6 +218,7 @@ internal sealed class SecAgentBridge : IDisposable
         SwitchWhiteboardPageTool => _visuals.SwitchWhiteboardPageAsync(ReadRequiredInt(arguments, "page")),
         AddWhiteboardPageTool => _visuals.AddWhiteboardPageAsync(),
         DeleteWhiteboardPageTool => _visuals.DeleteWhiteboardPageAsync(),
+        InsertSvgTool => _visuals.InsertSvgAsync(ReadRequiredString(arguments, "svg"), ReadString(arguments, "name"), ReadNullableDouble(arguments, "width"), ReadNullableDouble(arguments, "height")),
         _ => throw new ArgumentException($"未知工具：{name}")
     };
 
@@ -218,6 +235,13 @@ internal sealed class SecAgentBridge : IDisposable
 
     private static int ReadRequiredInt(JsonElement args, string name) =>
         ReadNullableInt(args, name) ?? throw new ArgumentException($"缺少整数参数：{name}");
+
+    private static string ReadRequiredString(JsonElement args, string name)
+        => ReadString(args, name) is { Length: > 0 } value ? value : throw new ArgumentException($"缺少字符串参数：{name}");
+
+    private static double? ReadNullableDouble(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)
+            ? number : null;
 
     public void Dispose()
     {

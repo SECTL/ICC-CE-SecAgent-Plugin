@@ -2,9 +2,14 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -31,6 +36,211 @@ internal sealed class IccceVisualBridge
 
     public Task<JsonNode> DeleteWhiteboardPageAsync()
         => OnUiAsync(window => Task.FromResult<JsonNode>(InvokePageAction(window, "DeleteWhiteboardPage", "deleted")));
+
+    public Task<JsonNode> InsertSvgAsync(string svg, string name, double? width, double? height)
+        => OnUiAsync(window => Task.FromResult<JsonNode>(InsertSvg(window, svg, name, width, height)));
+
+    private static JsonObject InsertSvg(object window, string svg, string name, double? requestedWidth, double? requestedHeight)
+    {
+        if (string.IsNullOrWhiteSpace(svg)) throw new ArgumentException("svg 不能为空。", nameof(svg));
+        if (svg.Length > 20 * 1024 * 1024) throw new ArgumentException("svg 不能超过 20 MiB。", nameof(svg));
+        if (Regex.IsMatch(svg, @"<script\b|\bon[a-z]+\s*=", RegexOptions.IgnoreCase))
+            throw new ArgumentException("SVG 不允许包含脚本或事件处理属性。", nameof(svg));
+
+        var canvas = ReadField<InkCanvas>(window, "inkCanvas")
+            ?? throw new InvalidOperationException("ICC-CE 当前没有可用的白板画布。");
+        var (svgWidth, svgHeight) = ReadSvgSize(svg);
+        if (TryReadEditableScene(svg, out var editableScene))
+            return InsertEditableSceneGroup(window, canvas, editableScene, name, requestedWidth, requestedHeight, svgWidth, svgHeight);
+
+        var element = new SvgCanvasElement(svg)
+        {
+            Name = "svg_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"),
+            Width = Clamp(requestedWidth ?? svgWidth, 160, 1800),
+            Height = Clamp(requestedHeight ?? svgHeight, 100, 1400)
+        };
+        InkCanvas.SetLeft(element, Math.Max(0, (canvas.ActualWidth - element.Width) / 2));
+        InkCanvas.SetTop(element, Math.Max(0, (canvas.ActualHeight - element.Height) / 2));
+        var transforms = new TransformGroup();
+        transforms.Children.Add(new ScaleTransform(1, 1));
+        transforms.Children.Add(new TranslateTransform(0, 0));
+        transforms.Children.Add(new RotateTransform(0));
+        element.RenderTransform = transforms;
+
+        canvas.Select(new StrokeCollection());
+        canvas.EditingMode = InkCanvasEditingMode.Select;
+        canvas.Children.Add(element);
+        InvokeRequired<object>(window, "BindElementEvents", element);
+        CommitElementInsertHistory(window, element);
+        InvokeRequired<object>(window, "SelectElement", element);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["type"] = "svg",
+            ["name"] = name ?? element.Name,
+            ["width"] = element.Width,
+            ["height"] = element.Height,
+            ["selected"] = true,
+            ["editableParts"] = false,
+            ["note"] = "当前作为一个 SVG 元素插入，可移动、缩放和删除；内部文字/线条暂不拆分为独立白板元素。"
+        };
+    }
+
+    private static bool TryReadEditableScene(string svg, out JsonElement scene)
+    {
+        var match = Regex.Match(svg, "<metadata\\s+id\\s*=\\s*['\\\"]secagent-editable-scene['\\\"](?<attributes>[^>]*)>(?<scene>[^<]*)</metadata>", RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            scene = default;
+            return false;
+        }
+        try
+        {
+            var attributes = match.Groups["attributes"].Value;
+            var sceneText = match.Groups["scene"].Value.Trim();
+            if (Regex.IsMatch(attributes, "data-encoding\\s*=\\s*['\\\"]base64['\\\"]", RegexOptions.IgnoreCase))
+                sceneText = Encoding.UTF8.GetString(Convert.FromBase64String(sceneText));
+            using var document = JsonDocument.Parse(sceneText);
+            scene = document.RootElement.Clone();
+            return scene.ValueKind == JsonValueKind.Object && scene.TryGetProperty("elements", out var elements) && elements.ValueKind == JsonValueKind.Array;
+        }
+        catch (JsonException)
+        {
+            scene = default;
+            return false;
+        }
+    }
+
+    private static JsonObject InsertEditableSceneGroup(object window, InkCanvas canvas, JsonElement scene, string name, double? requestedWidth, double? requestedHeight, double fallbackWidth, double fallbackHeight)
+    {
+        var sourceWidth = ReadSceneNumber(scene, "width", fallbackWidth);
+        var sourceHeight = ReadSceneNumber(scene, "height", fallbackHeight);
+        var targetWidth = Clamp(requestedWidth ?? Math.Min(sourceWidth, 1200), 160, 1800);
+        var scale = targetWidth / Math.Max(1, sourceWidth);
+        if (requestedHeight.HasValue)
+            scale = Math.Min(scale, Clamp(requestedHeight.Value, 100, 1400) / Math.Max(1, sourceHeight));
+        scale = Math.Max(0.05, scale);
+        var sceneWidth = sourceWidth * scale;
+        var sceneHeight = sourceHeight * scale;
+        var baseLeft = Math.Max(0, (canvas.ActualWidth - sceneWidth) / 2);
+        var baseTop = Math.Max(0, (canvas.ActualHeight - sceneHeight) / 2);
+        if (!scene.TryGetProperty("elements", out var rawElements) || rawElements.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("SVG 中的 editableScene 无效。", nameof(scene));
+        if (rawElements.GetArrayLength() > 3000)
+            throw new ArgumentException("editableScene 元素数量不能超过 3000。", nameof(scene));
+
+        canvas.Select(new StrokeCollection());
+        canvas.EditingMode = InkCanvasEditingMode.Select;
+        var group = new SvgSceneGroup(scene, scale)
+        {
+            Name = "svgscene_group_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff")
+        };
+        if (group.ElementCount == 0)
+            throw new ArgumentException("editableScene 中没有可插入的元素。", nameof(scene));
+
+        InkCanvas.SetLeft(group, baseLeft);
+        InkCanvas.SetTop(group, baseTop);
+        InvokeRequired<object>(window, "InitializeElementTransform", group);
+        canvas.Children.Add(group);
+        InvokeRequired<object>(window, "BindElementEvents", group);
+        CommitElementInsertHistory(window, group);
+        InvokeRequired<object>(window, "SelectElement", group);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["type"] = "editable-scene-group",
+            ["name"] = string.IsNullOrWhiteSpace(name) ? "Markdown 手写内容" : name,
+            ["width"] = sceneWidth,
+            ["height"] = sceneHeight,
+            ["elementCount"] = group.ElementCount,
+            ["selected"] = true,
+            ["selectedAll"] = true,
+            ["editableParts"] = true,
+            ["note"] = "已作为一个整体选中；内部仍保留独立路径，支持面积擦除和逐项处理。"
+        };
+    }
+
+    private static JsonObject InsertEditableScene(object window, InkCanvas canvas, JsonElement scene, string name, double? requestedWidth, double? requestedHeight, double fallbackWidth, double fallbackHeight)
+    {
+        var sourceWidth = ReadSceneNumber(scene, "width", fallbackWidth);
+        var sourceHeight = ReadSceneNumber(scene, "height", fallbackHeight);
+        var targetWidth = Clamp(requestedWidth ?? Math.Min(sourceWidth, 1200), 160, 1800);
+        var scale = targetWidth / Math.Max(1, sourceWidth);
+        if (requestedHeight.HasValue) scale = Math.Min(scale, Clamp(requestedHeight.Value, 100, 1400) / Math.Max(1, sourceHeight));
+        scale = Math.Max(0.05, scale);
+        var sceneWidth = sourceWidth * scale;
+        var sceneHeight = sourceHeight * scale;
+        var baseLeft = Math.Max(0, (canvas.ActualWidth - sceneWidth) / 2);
+        var baseTop = Math.Max(0, (canvas.ActualHeight - sceneHeight) / 2);
+        if (!scene.TryGetProperty("elements", out var rawElements) || rawElements.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("SVG 中的 editableScene 无效。", nameof(scene));
+        if (rawElements.GetArrayLength() > 3000) throw new ArgumentException("editableScene 元素数量不能超过 3000。", nameof(scene));
+
+        canvas.Select(new StrokeCollection());
+        canvas.EditingMode = InkCanvasEditingMode.Select;
+        SvgSceneElement selected = null;
+        var inserted = 0;
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        foreach (var sceneElement in rawElements.EnumerateArray())
+        {
+            if (sceneElement.ValueKind != JsonValueKind.Object) continue;
+            var element = new SvgSceneElement(sceneElement.Clone(), scale)
+            {
+                Name = "svgscene_" + timestamp + "_" + inserted
+            };
+            var position = SvgSceneElement.ReadPosition(sceneElement, scale);
+            InkCanvas.SetLeft(element, baseLeft + position.Left);
+            InkCanvas.SetTop(element, baseTop + position.Top);
+            InvokeRequired<object>(window, "InitializeElementTransform", element);
+            canvas.Children.Add(element);
+            InvokeRequired<object>(window, "BindElementEvents", element);
+            CommitElementInsertHistory(window, element);
+            if (selected is null && !string.Equals(element.SceneKind, "rect", StringComparison.OrdinalIgnoreCase)) selected = element;
+            inserted++;
+        }
+        if (inserted == 0) throw new ArgumentException("editableScene 中没有可插入的元素。", nameof(scene));
+        selected ??= canvas.Children[canvas.Children.Count - 1] as SvgSceneElement;
+        if (selected is not null) InvokeRequired<object>(window, "SelectElement", selected);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["type"] = "editable-scene",
+            ["name"] = string.IsNullOrWhiteSpace(name) ? "Markdown 手写内容" : name,
+            ["width"] = sceneWidth,
+            ["height"] = sceneHeight,
+            ["elementCount"] = inserted,
+            ["selected"] = selected is not null,
+            ["editableParts"] = true,
+            ["note"] = "已拆分为独立文字、线条和基础形状；可逐项选择、移动、等比例缩放、旋转和删除。"
+        };
+    }
+
+    private static double ReadSceneNumber(JsonElement element, string name, double fallback)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var result) && double.IsFinite(result) && result > 0
+            ? result : fallback;
+
+    private static void CommitElementInsertHistory(object window, FrameworkElement element)
+    {
+        var timeMachine = ReadField<object>(window, "timeMachine");
+        if (timeMachine is not null) InvokeRequired<object>(timeMachine, "CommitElementInsertHistory", element);
+    }
+
+    private static (double Width, double Height) ReadSvgSize(string svg)
+    {
+        var match = Regex.Match(svg, @"viewBox\s*=\s*[^0-9-]+[-+]?\d+(?:\.\d+)?\s+[-+]?\d+(?:\.\d+)?\s+([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)", RegexOptions.IgnoreCase);
+        return match.Success && double.TryParse(match.Groups[1].Value, out var width) && double.TryParse(match.Groups[2].Value, out var height)
+            ? (width, height) : (1200, 800);
+    }
+
+    private static double Clamp(double value, double min, double max)
+        => double.IsFinite(value) && value > 0 ? Math.Min(max, Math.Max(min, value)) : min;
+
+    private static T ReadField<T>(object instance, string name) where T : class
+    {
+        for (var type = instance.GetType(); type is not null; type = type.BaseType)
+            if (type.GetField(name, InstanceFlags)?.GetValue(instance) is T value) return value;
+        return null;
+    }
 
     private static Task<T> OnUiAsync<T>(Func<object, Task<T>> action)
     {

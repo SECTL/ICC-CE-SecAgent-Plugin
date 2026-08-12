@@ -70,6 +70,7 @@ internal sealed class IccceVisualBridge
         canvas.Select(new StrokeCollection());
         canvas.EditingMode = InkCanvasEditingMode.Select;
         canvas.Children.Add(element);
+        RefreshInsertedElementLayout(canvas, element);
         InvokeRequired<object>(window, "BindElementEvents", element);
         CommitElementInsertHistory(window, element);
         InvokeRequired<object>(window, "SelectElement", element);
@@ -142,6 +143,7 @@ internal sealed class IccceVisualBridge
         InkCanvas.SetTop(group, baseTop);
         InvokeRequired<object>(window, "InitializeElementTransform", group);
         canvas.Children.Add(group);
+        RefreshInsertedElementLayout(canvas, group);
         InvokeRequired<object>(window, "BindElementEvents", group);
         CommitElementInsertHistory(window, group);
         InvokeRequired<object>(window, "SelectElement", group);
@@ -200,6 +202,7 @@ internal sealed class IccceVisualBridge
         }
         if (inserted == 0) throw new ArgumentException("editableScene 中没有可插入的元素。", nameof(scene));
         selected ??= canvas.Children[canvas.Children.Count - 1] as SvgSceneElement;
+        RefreshInsertedElementLayout(canvas, selected);
         if (selected is not null) InvokeRequired<object>(window, "SelectElement", selected);
         return new JsonObject
         {
@@ -218,6 +221,21 @@ internal sealed class IccceVisualBridge
     private static double ReadSceneNumber(JsonElement element, string name, double fallback)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var result) && double.IsFinite(result) && result > 0
             ? result : fallback;
+
+    private static void RefreshInsertedElementLayout(InkCanvas canvas, FrameworkElement element)
+    {
+        if (canvas is null || element is null) return;
+
+        element.Visibility = Visibility.Visible;
+        element.IsHitTestVisible = true;
+        canvas.InvalidateMeasure();
+        canvas.InvalidateArrange();
+        canvas.UpdateLayout();
+        element.InvalidateMeasure();
+        element.InvalidateArrange();
+        element.UpdateLayout();
+        element.InvalidateVisual();
+    }
 
     private static void CommitElementInsertHistory(object window, FrameworkElement element)
     {

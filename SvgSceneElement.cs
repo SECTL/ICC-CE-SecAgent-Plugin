@@ -141,15 +141,25 @@ public sealed class SvgSceneElement : Border
 
         try
         {
-            var eraseGeometry = new RectangleGeometry(rectangle);
-            if (path.RenderTransform is not null && !path.RenderTransform.Value.IsIdentity)
+            // Path data from the renderer is stored in source coordinates while the
+            // visual Path is scaled to the inserted scene size. Do the subtraction in
+            // rendered/local coordinates, then convert the remaining geometry back to
+            // source coordinates before serializing it. The old code mixed these two
+            // spaces, so an eraser could visibly cross a glyph without changing it.
+            var renderTransform = path.RenderTransform;
+            Matrix? inverseMatrix = null;
+            if (renderTransform is not null && !renderTransform.Value.IsIdentity)
             {
-                var inverse = path.RenderTransform.Inverse;
-                if (inverse is null) return false;
-                eraseGeometry = new RectangleGeometry(inverse.TransformBounds(rectangle));
+                var matrix = renderTransform.Value;
+                if (!matrix.HasInverse) return false;
+                matrix.Invert();
+                inverseMatrix = matrix;
             }
 
             var source = path.Data.Clone();
+            if (renderTransform is not null && !renderTransform.Value.IsIdentity)
+                source.Transform = renderTransform;
+
             var wasStroke = path.Stroke is not null && path.StrokeThickness > 0;
             if (wasStroke)
             {
@@ -159,12 +169,23 @@ public sealed class SvgSceneElement : Border
                     ToleranceType.Absolute);
             }
 
-            var remaining = Geometry.Combine(source, eraseGeometry, GeometryCombineMode.Exclude, null);
-            if (remaining is null || remaining.Bounds.IsEmpty || GetGeometryArea(remaining) <= 0.01)
+            var remainingRendered = Geometry.Combine(
+                source,
+                new RectangleGeometry(rectangle),
+                GeometryCombineMode.Exclude,
+                null);
+            if (remainingRendered is null || remainingRendered.Bounds.IsEmpty || GetGeometryArea(remainingRendered) <= 0.01)
             {
                 Child = null;
                 SerializeEmptyElement();
                 return true;
+            }
+
+            var remaining = remainingRendered;
+            if (inverseMatrix.HasValue)
+            {
+                remaining = remainingRendered.Clone();
+                remaining.Transform = new MatrixTransform(inverseMatrix.Value);
             }
 
             path.Data = remaining;

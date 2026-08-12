@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace Ink_Canvas.SecAgent.Plugin;
 
@@ -15,6 +16,11 @@ namespace Ink_Canvas.SecAgent.Plugin;
 /// </summary>
 public sealed class SvgSceneGroup : Border
 {
+    // A fully transparent WPF brush can be skipped by hit testing depending on the
+    // visual tree and the element underneath it. One alpha unit is visually invisible
+    // but gives the complete insertion rectangle a stable mouse target.
+    private static readonly Brush HitTestBrush = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+
     private readonly Canvas _content;
     private readonly JsonObject _scene;
     private readonly double _scale;
@@ -33,7 +39,7 @@ public sealed class SvgSceneGroup : Border
 
         Width = Math.Max(1, sourceWidth * actualScale);
         Height = Math.Max(1, sourceHeight * actualScale);
-        Background = System.Windows.Media.Brushes.Transparent;
+        Background = HitTestBrush;
         BorderThickness = new Thickness(0);
         ClipToBounds = false;
         Focusable = false;
@@ -45,7 +51,7 @@ public sealed class SvgSceneGroup : Border
             // Keep the whole SVG frame hit-testable, including transparent areas. The host
             // binds move/select handlers to the group, so a transparent canvas lets the user
             // drag the insertion by its bounding box rather than only by painted pixels.
-            Background = System.Windows.Media.Brushes.Transparent,
+            Background = HitTestBrush,
             ClipToBounds = false,
             IsHitTestVisible = true
         };

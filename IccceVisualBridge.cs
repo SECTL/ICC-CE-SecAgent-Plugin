@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -42,6 +43,8 @@ internal sealed class IccceVisualBridge
 
     private static JsonObject InsertSvg(object window, string svg, string name, double? requestedWidth, double? requestedHeight)
     {
+        Diag(window, $"INSERT_START len={svg?.Length ?? 0} name={name ?? "<null>"} requested=({requestedWidth},{requestedHeight}) " +
+            $"window={window?.GetType().FullName ?? "null"} assembly={window?.GetType().Assembly.Location ?? "<unknown>"}");
         if (string.IsNullOrWhiteSpace(svg)) throw new ArgumentException("svg 不能为空。", nameof(svg));
         if (svg.Length > 20 * 1024 * 1024) throw new ArgumentException("svg 不能超过 20 MiB。", nameof(svg));
         if (Regex.IsMatch(svg, @"<script\b|\bon[a-z]+\s*=", RegexOptions.IgnoreCase))
@@ -50,6 +53,9 @@ internal sealed class IccceVisualBridge
         var canvas = ReadField<InkCanvas>(window, "inkCanvas")
             ?? throw new InvalidOperationException("ICC-CE 当前没有可用的白板画布。");
         var (svgWidth, svgHeight) = ReadSvgSize(svg);
+        Diag(window, $"INSERT_CANVAS mode={canvas.EditingMode} children={canvas.Children.Count} strokes={canvas.Strokes.Count} " +
+            $"actual=({canvas.ActualWidth:0.##}x{canvas.ActualHeight:0.##}) svgSize=({svgWidth:0.##}x{svgHeight:0.##}) " +
+            $"editableMetadata={svg.Contains("secagent-editable-scene", StringComparison.OrdinalIgnoreCase)}");
         if (TryReadEditableScene(svg, out var editableScene))
             return InsertEditableSceneGroup(window, canvas, editableScene, name, requestedWidth, requestedHeight, svgWidth, svgHeight);
 
@@ -71,9 +77,12 @@ internal sealed class IccceVisualBridge
         canvas.EditingMode = InkCanvasEditingMode.Select;
         canvas.Children.Add(element);
         RefreshInsertedElementLayout(canvas, element);
+        Diag(window, $"INSERT_FALLBACK_ADDED element={element.Name} size=({element.Width:0.##}x{element.Height:0.##}) " +
+            $"left={InkCanvas.GetLeft(element):0.##} top={InkCanvas.GetTop(element):0.##} children={canvas.Children.Count}");
         InvokeRequired<object>(window, "BindElementEvents", element);
         CommitElementInsertHistory(window, element);
         InvokeRequired<object>(window, "SelectElement", element);
+        Diag(window, $"INSERT_FALLBACK_DONE selected=true mode={canvas.EditingMode} element={element.Name}");
         return new JsonObject
         {
             ["ok"] = true,
@@ -144,9 +153,13 @@ internal sealed class IccceVisualBridge
         InvokeRequired<object>(window, "InitializeElementTransform", group);
         canvas.Children.Add(group);
         RefreshInsertedElementLayout(canvas, group);
+        Diag(window, $"INSERT_GROUP_ADDED name={group.Name} source=({sourceWidth:0.##}x{sourceHeight:0.##}) " +
+            $"scale={scale:0.####} size=({group.Width:0.##}x{group.Height:0.##}) pos=({baseLeft:0.##},{baseTop:0.##}) " +
+            $"count={group.ElementCount} layout=({group.ActualWidth:0.##}x{group.ActualHeight:0.##}) children={canvas.Children.Count}");
         InvokeRequired<object>(window, "BindElementEvents", group);
         CommitElementInsertHistory(window, group);
         InvokeRequired<object>(window, "SelectElement", group);
+        Diag(window, $"INSERT_GROUP_DONE selected=true mode={canvas.EditingMode} group={group.Name} count={group.ElementCount}");
         return new JsonObject
         {
             ["ok"] = true,
@@ -235,6 +248,27 @@ internal sealed class IccceVisualBridge
         element.InvalidateArrange();
         element.UpdateLayout();
         element.InvalidateVisual();
+    }
+
+    private static void Diag(object window, string message, bool error = false)
+    {
+        var line = $"[SecAgentDiag][Plugin] {message}";
+        Debug.WriteLine(line);
+        try
+        {
+            var assembly = window?.GetType().Assembly;
+            var logType = assembly?.GetType("Ink_Canvas.Helpers.LogHelper");
+            var enumType = logType?.GetNestedType("LogType", BindingFlags.Public | BindingFlags.NonPublic);
+            var method = logType?.GetMethod("WriteLogToFile", BindingFlags.Public | BindingFlags.Static,
+                null, new[] { typeof(string), enumType }, null);
+            if (method is null || enumType is null) return;
+            var level = Enum.Parse(enumType, error ? "Error" : "Info");
+            method.Invoke(null, new[] { line, level });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[SecAgentDiag][Plugin] host-log-failed {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static void CommitElementInsertHistory(object window, FrameworkElement element)

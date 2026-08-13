@@ -41,8 +41,9 @@ public sealed class SvgSceneElement : Border
     }
 
     /// <summary>
-    /// Tests the actual rendered path rather than the Border's full selection bounds.
-    /// This lets the host distinguish point/stroke erasing from rectangular geometry erasing.
+    /// Uses the rendered layout bounds as the hit-test unit. Each Markdown source line is
+    /// already one scene element, so testing a glyph outline on every mouse move adds a
+    /// large amount of WPF geometry work without improving the erase semantics.
     /// </summary>
     public bool HitTestLocalPoint(Point point, double tolerance = 4)
     {
@@ -51,9 +52,7 @@ public sealed class SvgSceneElement : Border
         // uses its local bounds for hit testing rather than requiring a glyph outline.
         if (UsesBoundsHitTest())
         {
-            var bounds = new Rect(0, 0, Width, Height);
-            bounds.Inflate(tolerance, tolerance);
-            return bounds.Contains(point);
+            return GetRenderedBounds(tolerance).Contains(point);
         }
 
         var geometry = GetRenderedGeometry(tolerance);
@@ -68,9 +67,7 @@ public sealed class SvgSceneElement : Border
         if (rectangle.IsEmpty) return false;
         if (UsesBoundsHitTest())
         {
-            var bounds = new Rect(0, 0, Width, Height);
-            bounds.Inflate(tolerance, tolerance);
-            return bounds.IntersectsWith(rectangle);
+            return GetRenderedBounds(tolerance).IntersectsWith(rectangle);
         }
 
         var geometry = GetRenderedGeometry(tolerance);
@@ -89,11 +86,20 @@ public sealed class SvgSceneElement : Border
     }
 
     /// <summary>
-    /// Subtracts an eraser rectangle from the actual path geometry. The host uses this for
-    /// EraseByPoint; EraseByStroke removes the whole SvgSceneElement instead.
+    /// Removes one semantic scene unit when the area eraser touches it. Markdown text is
+    /// represented as one path per source line, so the whole line is the erase unit. This
+    /// avoids repeatedly running Geometry.Combine against large handwriting glyph paths.
     /// </summary>
     public bool EraseLocalRect(Rect rectangle, double tolerance = 4)
     {
+        if (SceneKind == "path" || SceneKind == "line" || SceneKind == "rect" || SceneKind == "svg" || Child is TextBlock)
+        {
+            if (rectangle.IsEmpty || !GetRenderedBounds(tolerance).IntersectsWith(rectangle)) return false;
+            Child = null;
+            SerializeEmptyElement();
+            return true;
+        }
+
         // Text stays a single row-level editable item.  Area erasing any part of that row
         // removes the row, matching line/stroke erasing and avoiding a misleading partial
         // glyph crop from a TextBlock.
@@ -221,7 +227,28 @@ public sealed class SvgSceneElement : Border
            || (Child is TextBlock text && !string.IsNullOrWhiteSpace(text.Text));
 
     private bool UsesBoundsHitTest()
-        => Child is Rectangle || Child is TextBlock || Child is WebBrowser || SceneKind == "svg";
+        => Child is Rectangle || Child is TextBlock || Child is WebBrowser
+           || SceneKind == "path" || SceneKind == "line" || SceneKind == "rect" || SceneKind == "svg";
+
+    private Rect GetRenderedBounds(double tolerance)
+    {
+        var bounds = new Rect(0, 0, Math.Max(1, Width), Math.Max(1, Height));
+        var extra = Math.Max(0, tolerance);
+        if (Child is Path path && path.Data is not null)
+        {
+            bounds = path.Data.Bounds;
+            if (path.RenderTransform is not null && !path.RenderTransform.Value.IsIdentity)
+                bounds = path.RenderTransform.TransformBounds(bounds);
+            if (path.Stroke is not null && path.StrokeThickness > 0)
+                extra += path.StrokeThickness / 2;
+        }
+        else if (Child is Rectangle rectangle && rectangle.Stroke is not null && rectangle.StrokeThickness > 0)
+        {
+            extra += rectangle.StrokeThickness / 2;
+        }
+        bounds.Inflate(extra, extra);
+        return bounds;
+    }
 
     private static double GetGeometryArea(Geometry geometry)
     {

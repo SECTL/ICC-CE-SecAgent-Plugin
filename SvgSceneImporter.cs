@@ -19,6 +19,7 @@ namespace Ink_Canvas.SecAgent.Plugin;
 internal static class SvgSceneImporter
 {
     private static readonly Regex NumberRegex = new(@"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", RegexOptions.Compiled);
+    public static string LastError { get; private set; } = "";
 
     private sealed class Style
     {
@@ -95,6 +96,7 @@ internal static class SvgSceneImporter
         }
         catch
         {
+            LastError = "SVG XML 或根元素解析失败";
             elements = new JsonArray();
             return false;
         }
@@ -170,10 +172,13 @@ internal static class SvgSceneImporter
         if (string.IsNullOrWhiteSpace(pathData)) return;
         try
         {
-            var geometry = Geometry.Parse(pathData);
+            // Geometry.Parse returns a frozen geometry in WPF. Clone before applying either
+            // the inherited SVG transform or the local-bounds normalization transform.
+            var geometry = Geometry.Parse(pathData).Clone();
             if (!transform.IsIdentity) geometry.Transform = new MatrixTransform(transform);
             var bounds = geometry.Bounds;
             if (bounds.IsEmpty || !double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height)) return;
+            geometry = geometry.Clone();
             geometry.Transform = new TranslateTransform(-bounds.X, -bounds.Y);
             var fill = ReadPaint(node, "fill", style.Fill);
             var stroke = ReadPaint(node, "stroke", style.Stroke);
@@ -193,8 +198,9 @@ internal static class SvgSceneImporter
                 ["strokeWidth"] = strokeWidth
             });
         }
-        catch
+        catch (Exception ex)
         {
+            LastError = $"图元 {node.Name.LocalName} 路径转换失败：{ex.Message}";
             // Unsupported SVG path syntax is skipped; no browser fallback is created.
         }
     }

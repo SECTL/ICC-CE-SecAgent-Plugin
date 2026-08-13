@@ -176,10 +176,15 @@ internal static class SvgSceneImporter
             // the inherited SVG transform or the local-bounds normalization transform.
             var geometry = Geometry.Parse(pathData).Clone();
             if (!transform.IsIdentity) geometry.Transform = new MatrixTransform(transform);
-            var bounds = geometry.Bounds;
+
+            // Geometry.ToString() serializes the original figures and omits the Geometry
+            // Transform. Flatten once to bake inherited SVG transforms into coordinates.
+            var transformedGeometry = geometry.GetFlattenedPathGeometry();
+            var bounds = transformedGeometry.Bounds;
             if (bounds.IsEmpty || !double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height)) return;
-            geometry = geometry.Clone();
-            geometry.Transform = new TranslateTransform(-bounds.X, -bounds.Y);
+            var normalizedGeometry = transformedGeometry.Clone();
+            normalizedGeometry.Transform = new TranslateTransform(-bounds.X, -bounds.Y);
+            geometry = normalizedGeometry.GetFlattenedPathGeometry();
             var fill = ReadPaint(node, "fill", style.Fill);
             var stroke = ReadPaint(node, "stroke", style.Stroke);
             var strokeWidth = Number(node.Attribute("stroke-width")?.Value);

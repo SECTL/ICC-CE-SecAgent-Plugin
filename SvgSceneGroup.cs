@@ -82,6 +82,27 @@ public sealed class SvgSceneGroup : Border
     public SvgSceneElement[] GetSceneElements()
         => _content.Children.OfType<SvgSceneElement>().ToArray();
 
+    /// <summary>
+    /// Forces the group and its private Canvas through one complete layout pass.  The host
+    /// inserts this control directly into InkCanvas and immediately displays a selection
+    /// frame; without an explicit arrange WPF may leave the group at 0x0 until a later tool
+    /// change invalidates the parent layout.
+    /// </summary>
+    public void ForceLayout()
+    {
+        var width = double.IsFinite(Width) && Width > 0 ? Width : 1;
+        var height = double.IsFinite(Height) && Height > 0 ? Height : 1;
+        var size = new Size(width, height);
+
+        Measure(size);
+        Arrange(new Rect(new Point(0, 0), size));
+        _content.Measure(size);
+        _content.Arrange(new Rect(new Point(0, 0), size));
+        _content.UpdateLayout();
+        UpdateLayout();
+        InvalidateVisual();
+    }
+
     public bool RemoveSceneElement(SvgSceneElement element)
     {
         if (element is null || !_content.Children.Contains(element)) return false;

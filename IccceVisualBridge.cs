@@ -241,11 +241,30 @@ internal sealed class IccceVisualBridge
 
         element.Visibility = Visibility.Visible;
         element.IsHitTestVisible = true;
+
+        // InkCanvas uses an internal arrange pass for children.  Calling UpdateLayout()
+        // alone is not sufficient when this method runs synchronously from the plugin
+        // dispatcher: the child can still report ActualWidth/ActualHeight == 0 until the
+        // next tool change causes another arrange pass.  Arrange the fixed-size element
+        // immediately so rendering, selection overlays, transparent hit areas and eraser
+        // coordinate transforms all see the same rectangle before the tool call returns.
+        var width = double.IsFinite(element.Width) && element.Width > 0 ? element.Width : 1;
+        var height = double.IsFinite(element.Height) && element.Height > 0 ? element.Height : 1;
+        var size = new System.Windows.Size(width, height);
+        element.Measure(size);
+        element.Arrange(new System.Windows.Rect(new System.Windows.Point(0, 0), size));
+        element.UpdateLayout();
+
+        if (element is SvgSceneGroup group)
+            group.ForceLayout();
+
         canvas.InvalidateMeasure();
         canvas.InvalidateArrange();
         canvas.UpdateLayout();
         element.InvalidateMeasure();
         element.InvalidateArrange();
+        element.Measure(size);
+        element.Arrange(new System.Windows.Rect(new System.Windows.Point(0, 0), size));
         element.UpdateLayout();
         element.InvalidateVisual();
     }

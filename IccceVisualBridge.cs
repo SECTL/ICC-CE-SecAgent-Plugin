@@ -62,7 +62,7 @@ internal sealed class IccceVisualBridge
         if (SvgSceneImporter.TryImport(svg, out editableScene))
             return InsertEditableSceneGroup(window, canvas, editableScene, name, requestedWidth, requestedHeight, svgWidth, svgHeight);
 
-        throw new ArgumentException("SVG 只支持可转换为 WPF 矢量的基础图元：path、rect、circle、ellipse、line、polyline、polygon、text。包含 foreignObject、复杂滤镜或脚本的 SVG 请先转换为路径。", nameof(svg));
+        throw new ArgumentException($"SVG 只支持可转换为 WPF 矢量的基础图元：path、rect、circle、ellipse、line、polyline、polygon、text。包含 foreignObject、复杂滤镜或脚本的 SVG 请先转换为路径。{SvgSceneImporter.LastError}", nameof(svg));
     }
 
 #if false

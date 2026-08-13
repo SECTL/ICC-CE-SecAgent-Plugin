@@ -76,6 +76,8 @@ internal sealed class IccceVisualBridge
         canvas.Select(new StrokeCollection());
         canvas.EditingMode = InkCanvasEditingMode.Select;
         canvas.Children.Add(element);
+        EnsureCanvasVisibleForInsertion(canvas);
+        Diag(window, $"INSERT_CANVAS_RESTORED visibility={canvas.Visibility} hit={canvas.IsHitTestVisible} children={canvas.Children.Count}");
         RefreshInsertedElementLayout(canvas, element);
         Diag(window, $"INSERT_FALLBACK_ADDED element={element.Name} size=({element.Width:0.##}x{element.Height:0.##}) " +
             $"left={InkCanvas.GetLeft(element):0.##} top={InkCanvas.GetTop(element):0.##} children={canvas.Children.Count}");
@@ -152,6 +154,8 @@ internal sealed class IccceVisualBridge
         InkCanvas.SetTop(group, baseTop);
         InvokeRequired<object>(window, "InitializeElementTransform", group);
         canvas.Children.Add(group);
+        EnsureCanvasVisibleForInsertion(canvas);
+        Diag(window, $"INSERT_CANVAS_RESTORED visibility={canvas.Visibility} hit={canvas.IsHitTestVisible} children={canvas.Children.Count}");
         RefreshInsertedElementLayout(canvas, group);
         Diag(window, $"INSERT_GROUP_ADDED name={group.Name} source=({sourceWidth:0.##}x{sourceHeight:0.##}) " +
             $"scale={scale:0.####} size=({group.Width:0.##}x{group.Height:0.##}) pos=({baseLeft:0.##},{baseTop:0.##}) " +
@@ -234,6 +238,21 @@ internal sealed class IccceVisualBridge
     private static double ReadSceneNumber(JsonElement element, string name, double fallback)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var result) && double.IsFinite(result) && result > 0
             ? result : fallback;
+
+    private static void EnsureCanvasVisibleForInsertion(InkCanvas canvas)
+    {
+        // In cursor mode ICC-CE legitimately collapses the InkCanvas when it has no
+        // annotations. The insertion flow switches to Select before adding the child,
+        // so that mode transition can collapse the canvas just before this plugin adds
+        // its first scene. Restore the host surface after the child exists; otherwise
+        // it will not be painted until a later tool or settings change invalidates it.
+        if (canvas is null) return;
+        canvas.Visibility = Visibility.Visible;
+        canvas.IsHitTestVisible = true;
+        canvas.InvalidateMeasure();
+        canvas.InvalidateArrange();
+        canvas.InvalidateVisual();
+    }
 
     private static void RefreshInsertedElementLayout(InkCanvas canvas, FrameworkElement element)
     {

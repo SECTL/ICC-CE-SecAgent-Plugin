@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -18,6 +20,10 @@ public sealed class SvgSceneElement : Border
 {
     private const double HitPadding = 4;
     private readonly double _scale;
+    // Area erasing is accumulated as cheap clip rectangles during pointer movement.
+    // The expensive path subtraction is materialized once when the gesture ends.
+    private readonly List<Rect> _pendingEraseRectangles = new();
+    private GeometryGroup _pendingEraseGeometry;
 
     public string SerializedElement { get; private set; }
     public string SceneKind { get; }
@@ -86,95 +92,119 @@ public sealed class SvgSceneElement : Border
     }
 
     /// <summary>
-    /// Removes one semantic scene unit when the area eraser touches it. Markdown text is
-    /// represented as one path per source line, so the whole line is the erase unit. This
-    /// avoids repeatedly running Geometry.Combine against large handwriting glyph paths.
+    /// Applies an area-eraser footprint. During a drag this only adds a clipping rectangle;
+    /// the expensive path subtraction is deferred until the gesture is committed. This
+    /// preserves rubber-eraser semantics while avoiding Geometry.Combine on every pointer
+    /// move for large handwriting paths.
     /// </summary>
     public bool EraseLocalRect(Rect rectangle, double tolerance = 4)
     {
-        if (SceneKind == "path" || SceneKind == "line" || SceneKind == "rect" || SceneKind == "svg" || Child is TextBlock)
+        if (rectangle.IsEmpty || !GetRenderedBounds(tolerance).IntersectsWith(rectangle)) return false;
+
+        // Browser-backed Mermaid and legacy TextBlock elements do not expose editable path
+        // data to WPF. Keep their existing whole-object fallback; generated Markdown text,
+        // rules and table borders use Path and receive true partial erasing below.
+        if (SceneKind == "svg" || Child is WebBrowser || Child is TextBlock)
         {
-            if (rectangle.IsEmpty || !GetRenderedBounds(tolerance).IntersectsWith(rectangle)) return false;
             Child = null;
             SerializeEmptyElement();
             return true;
         }
 
-        // Text stays a single row-level editable item.  Area erasing any part of that row
-        // removes the row, matching line/stroke erasing and avoiding a misleading partial
-        // glyph crop from a TextBlock.
-        if (SceneKind == "svg" || Child is TextBlock)
+        if (Child is not Path && Child is not Rectangle) return false;
+
+        // A footprint covering the remaining rendered bounds can be handled without any
+        // geometry operation. Partial footprints are queued and clipped immediately.
+        if (rectangle.Contains(GetRenderedBounds(0)))
         {
-            if (rectangle.IsEmpty || !new Rect(0, 0, Width, Height).IntersectsWith(rectangle)) return false;
+            _pendingEraseRectangles.Clear();
+            _pendingEraseGeometry = null;
             Child = null;
             SerializeEmptyElement();
             return true;
         }
-        if (Child is Rectangle rectangleShape)
-        {
-            if (rectangle.IsEmpty) return false;
-            var bounds = new Rect(0, 0, Width, Height);
-            if (!bounds.IntersectsWith(rectangle)) return false;
 
-            try
+        var eraseRectangle = ToChildLocalRectangle(rectangle);
+        if (eraseRectangle.IsEmpty) return false;
+
+        // Pointer events can repeat the same footprint while the stylus is stationary or
+        // while the host is catching up. Do not grow the clip tree for an already-covered
+        // region in this gesture.
+        if (_pendingEraseRectangles.Any(existing => existing.Contains(eraseRectangle)))
+            return false;
+
+        _pendingEraseRectangles.Add(eraseRectangle);
+        _pendingEraseGeometry ??= new GeometryGroup { FillRule = FillRule.Nonzero };
+        _pendingEraseGeometry.Children.Add(new RectangleGeometry(eraseRectangle));
+        ApplyPendingEraseClip();
+        return true;
+    }
+
+    /// <summary>
+    /// Converts the cheap clip accumulated during an area-erase gesture into persistent
+    /// path data. It is called once per touched element at pointer-up/history read time,
+    /// not once per pointer move.
+    /// </summary>
+    public bool CommitPendingAreaErase()
+    {
+        if (_pendingEraseRectangles.Count == 0) return HasVisualContent;
+
+        try
+        {
+            if (Child is Rectangle rectangleShape)
             {
-                Geometry source = new RectangleGeometry(bounds);
+                Geometry rectangleSource = new RectangleGeometry(new Rect(0, 0, Width, Height));
                 var originalFill = rectangleShape.Fill;
                 var originalStroke = rectangleShape.Stroke;
                 var strokeWidth = Math.Max(0, rectangleShape.StrokeThickness);
                 if (originalStroke is not null && strokeWidth > 0)
                 {
-                    var outline = source.GetWidenedPathGeometry(new Pen(originalStroke, strokeWidth), 0.1, ToleranceType.Absolute);
-                    source = Geometry.Combine(source, outline, GeometryCombineMode.Union, null);
+                    var outline = rectangleSource.GetWidenedPathGeometry(new Pen(originalStroke, strokeWidth), 0.1, ToleranceType.Absolute);
+                    rectangleSource = Geometry.Combine(rectangleSource, outline, GeometryCombineMode.Union, null);
                 }
 
-                var remaining = Geometry.Combine(source, new RectangleGeometry(rectangle), GeometryCombineMode.Exclude, null);
-                if (remaining is null || remaining.Bounds.IsEmpty || GetGeometryArea(remaining) <= 0.01)
+                var rectangleRemaining = Geometry.Combine(rectangleSource, _pendingEraseGeometry, GeometryCombineMode.Exclude, null);
+                if (rectangleRemaining is null || rectangleRemaining.Bounds.IsEmpty || GetGeometryArea(rectangleRemaining) <= 0.01)
                 {
+                    ClearPendingErase();
                     Child = null;
                     SerializeEmptyElement();
-                    return true;
+                    return false;
                 }
 
-                var convertedPath = new Path
+                Child = new Path
                 {
-                    Data = remaining,
+                    Data = rectangleRemaining,
                     Fill = originalFill ?? originalStroke,
                     Stroke = null,
                     StrokeThickness = 0,
                     IsHitTestVisible = false
                 };
-                Child = convertedPath;
-                SerializePathGeometry(remaining, originalFill ?? originalStroke, true);
+                SerializePathGeometry(rectangleRemaining, originalFill ?? originalStroke, true);
+                ClearPendingErase();
                 return true;
             }
-            catch
-            {
-                return false;
-            }
-        }
-        if (rectangle.IsEmpty || Child is not Path path || path.Data is null) return false;
 
-        try
-        {
-            // Path data from the renderer is stored in source coordinates while the
-            // visual Path is scaled to the inserted scene size. Do the subtraction in
-            // rendered/local coordinates, then convert the remaining geometry back to
-            // source coordinates before serializing it. The old code mixed these two
-            // spaces, so an eraser could visibly cross a glyph without changing it.
+            if (Child is not Path path || path.Data is null)
+            {
+                ClearPendingErase();
+                return HasVisualContent;
+            }
+
+            // Path data is stored in source coordinates while the visible Path can be
+            // scaled through RenderTransform. Convert pending rectangles to rendered
+            // coordinates before subtracting, then restore source coordinates.
             var renderTransform = path.RenderTransform;
             Matrix? inverseMatrix = null;
+            var source = path.Data.Clone();
             if (renderTransform is not null && !renderTransform.Value.IsIdentity)
             {
                 var matrix = renderTransform.Value;
-                if (!matrix.HasInverse) return false;
+                if (!matrix.HasInverse) return HasVisualContent;
                 matrix.Invert();
                 inverseMatrix = matrix;
-            }
-
-            var source = path.Data.Clone();
-            if (renderTransform is not null && !renderTransform.Value.IsIdentity)
                 source.Transform = renderTransform;
+            }
 
             var wasStroke = path.Stroke is not null && path.StrokeThickness > 0;
             if (wasStroke)
@@ -185,16 +215,24 @@ public sealed class SvgSceneElement : Border
                     ToleranceType.Absolute);
             }
 
+            Geometry eraseGeometry = _pendingEraseGeometry;
+            if (renderTransform is not null && !renderTransform.Value.IsIdentity)
+            {
+                eraseGeometry = _pendingEraseGeometry.Clone();
+                eraseGeometry.Transform = renderTransform;
+            }
+
             var remainingRendered = Geometry.Combine(
                 source,
-                new RectangleGeometry(rectangle),
+                eraseGeometry,
                 GeometryCombineMode.Exclude,
                 null);
             if (remainingRendered is null || remainingRendered.Bounds.IsEmpty || GetGeometryArea(remainingRendered) <= 0.01)
             {
+                ClearPendingErase();
                 Child = null;
                 SerializeEmptyElement();
-                return true;
+                return false;
             }
 
             var remaining = remainingRendered;
@@ -212,11 +250,14 @@ public sealed class SvgSceneElement : Border
                 path.StrokeThickness = 0;
             }
             SerializePathGeometry(remaining, wasStroke ? path.Fill : null, wasStroke);
+            ClearPendingErase();
             return true;
         }
         catch
         {
-            return false;
+            // Keep the visual clip if materialization fails; a later history read can retry
+            // without losing the user's visible erase result.
+            return HasVisualContent;
         }
     }
 
@@ -229,6 +270,46 @@ public sealed class SvgSceneElement : Border
     private bool UsesBoundsHitTest()
         => Child is Rectangle || Child is TextBlock || Child is WebBrowser
            || SceneKind == "path" || SceneKind == "line" || SceneKind == "rect" || SceneKind == "svg";
+
+    private Rect ToChildLocalRectangle(Rect elementRectangle)
+    {
+        if (Child is not Path path || path.RenderTransform is null || path.RenderTransform.Value.IsIdentity)
+            return elementRectangle;
+        var matrix = path.RenderTransform.Value;
+        if (!matrix.HasInverse) return Rect.Empty;
+        matrix.Invert();
+        return new MatrixTransform(matrix).TransformBounds(elementRectangle);
+    }
+
+    private void ApplyPendingEraseClip()
+    {
+        if (_pendingEraseGeometry is null) return;
+        if (Child is Path path && path.Data is not null)
+        {
+            var bounds = path.Data.Bounds;
+            if (path.Stroke is not null && path.StrokeThickness > 0)
+                bounds.Inflate(path.StrokeThickness / 2, path.StrokeThickness / 2);
+            path.Clip = new CombinedGeometry(
+                GeometryCombineMode.Exclude,
+                new RectangleGeometry(bounds),
+                _pendingEraseGeometry);
+        }
+        else if (Child is Rectangle rectangle)
+        {
+            rectangle.Clip = new CombinedGeometry(
+                GeometryCombineMode.Exclude,
+                new RectangleGeometry(new Rect(0, 0, Width, Height)),
+                _pendingEraseGeometry);
+        }
+    }
+
+    private void ClearPendingErase()
+    {
+        _pendingEraseRectangles.Clear();
+        _pendingEraseGeometry = null;
+        if (Child is Path path) path.Clip = null;
+        if (Child is Rectangle rectangle) rectangle.Clip = null;
+    }
 
     private Rect GetRenderedBounds(double tolerance)
     {

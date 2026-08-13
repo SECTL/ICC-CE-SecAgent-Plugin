@@ -114,8 +114,17 @@ public sealed class SvgSceneGroup : Border
     {
         var elements = new JsonArray();
         _scene["scale"] = _scale;
-        foreach (var element in GetSceneElements())
+        foreach (var element in GetSceneElements().ToArray())
         {
+            // Area erasing uses a cheap live clip while the pointer is moving. Materialize
+            // the accumulated rectangles exactly once when the host reads history/save
+            // state, then omit fully erased rows from the persisted scene.
+            element.CommitPendingAreaErase();
+            if (!element.HasVisualContent)
+            {
+                _content.Children.Remove(element);
+                continue;
+            }
             if (JsonNode.Parse(element.SerializedElement) is not JsonObject json) continue;
             var left = Canvas.GetLeft(element);
             var top = Canvas.GetTop(element);

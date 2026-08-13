@@ -46,8 +46,15 @@ public sealed class SvgSceneElement : Border
     /// </summary>
     public bool HitTestLocalPoint(Point point, double tolerance = 4)
     {
-        if (Child is Rectangle || SceneKind == "svg")
-            return new Rect(0, 0, Width, Height).Contains(point);
+        // Markdown rows are rendered as one TextBlock per editable scene item.  A row is
+        // deliberately the erase unit (the same semantic unit as one pen stroke), so text
+        // uses its local bounds for hit testing rather than requiring a glyph outline.
+        if (UsesBoundsHitTest())
+        {
+            var bounds = new Rect(0, 0, Width, Height);
+            bounds.Inflate(tolerance, tolerance);
+            return bounds.Contains(point);
+        }
 
         var geometry = GetRenderedGeometry(tolerance);
         return geometry?.FillContains(point) == true;
@@ -59,7 +66,7 @@ public sealed class SvgSceneElement : Border
     public bool IntersectsLocalRect(Rect rectangle, double tolerance = 4)
     {
         if (rectangle.IsEmpty) return false;
-        if (Child is Rectangle || SceneKind == "svg")
+        if (UsesBoundsHitTest())
         {
             var bounds = new Rect(0, 0, Width, Height);
             bounds.Inflate(tolerance, tolerance);
@@ -87,7 +94,10 @@ public sealed class SvgSceneElement : Border
     /// </summary>
     public bool EraseLocalRect(Rect rectangle, double tolerance = 4)
     {
-        if (SceneKind == "svg")
+        // Text stays a single row-level editable item.  Area erasing any part of that row
+        // removes the row, matching line/stroke erasing and avoiding a misleading partial
+        // glyph crop from a TextBlock.
+        if (SceneKind == "svg" || Child is TextBlock)
         {
             if (rectangle.IsEmpty || !new Rect(0, 0, Width, Height).IntersectsWith(rectangle)) return false;
             Child = null;
@@ -207,7 +217,11 @@ public sealed class SvgSceneElement : Border
     public bool HasVisualContent
         => (Child is Path path && path.Data is not null && !path.Data.Bounds.IsEmpty)
            || Child is Rectangle
-           || Child is WebBrowser;
+           || Child is WebBrowser
+           || (Child is TextBlock text && !string.IsNullOrWhiteSpace(text.Text));
+
+    private bool UsesBoundsHitTest()
+        => Child is Rectangle || Child is TextBlock || Child is WebBrowser || SceneKind == "svg";
 
     private static double GetGeometryArea(Geometry geometry)
     {
@@ -244,8 +258,13 @@ public sealed class SvgSceneElement : Border
         try
         {
             if (JsonNode.Parse(SerializedElement) is not JsonObject json) return;
-            if (json["kind"]?.GetValue<string>() == "svg") json["svg"] = "";
-            else json["d"] = "";
+            var kind = json["kind"]?.GetValue<string>();
+            if (string.Equals(kind, "svg", StringComparison.OrdinalIgnoreCase))
+                json["svg"] = "";
+            else if (string.Equals(kind, "text", StringComparison.OrdinalIgnoreCase) || json["text"] is not null)
+                json["text"] = "";
+            else
+                json["d"] = "";
             SerializedElement = json.ToJsonString();
         }
         catch

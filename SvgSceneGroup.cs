@@ -63,11 +63,25 @@ public sealed class SvgSceneGroup : Border
         foreach (var rawElement in elements.EnumerateArray())
         {
             if (rawElement.ValueKind != JsonValueKind.Object) continue;
-            var element = new SvgSceneElement(rawElement.Clone(), actualScale);
-            var position = SvgSceneElement.ReadPosition(rawElement, actualScale);
-            Canvas.SetLeft(element, position.Left);
-            Canvas.SetTop(element, position.Top);
-            _content.Children.Add(element);
+            // Older Markdown scenes stored Mermaid as one kind=svg browser element. Expand
+            // that payload into native WPF paths during construction so opening an old saved
+            // page also avoids WebBrowser airspace and remains compatible with erasing.
+            if (string.Equals(ReadString(rawElement, "kind", ""), "svg", StringComparison.OrdinalIgnoreCase)
+                && SvgSceneImporter.TryImportElements(ReadString(rawElement, "svg", ""), out var imported))
+            {
+                var offsetX = ReadNumber(rawElement, "x", 0);
+                var offsetY = ReadNumber(rawElement, "y", 0);
+                foreach (var importedNode in imported.OfType<JsonObject>())
+                {
+                    importedNode["x"] = ReadNumber(importedNode, "x", 0) + offsetX;
+                    importedNode["y"] = ReadNumber(importedNode, "y", 0) + offsetY;
+                    using var importedDocument = JsonDocument.Parse(importedNode.ToJsonString());
+                    AddSceneElement(importedDocument.RootElement.Clone(), actualScale);
+                }
+                continue;
+            }
+
+            AddSceneElement(rawElement.Clone(), actualScale);
         }
     }
 
@@ -135,6 +149,26 @@ public sealed class SvgSceneGroup : Border
         _scene["elements"] = elements;
         return _scene.ToJsonString();
     }
+
+    private void AddSceneElement(JsonElement rawElement, double actualScale)
+    {
+        var element = new SvgSceneElement(rawElement, actualScale);
+        var position = SvgSceneElement.ReadPosition(rawElement, actualScale);
+        Canvas.SetLeft(element, position.Left);
+        Canvas.SetTop(element, position.Top);
+        _content.Children.Add(element);
+    }
+
+    private static string ReadString(JsonElement element, string name, string fallback)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? fallback : fallback;
+
+    private static double ReadNumber(JsonElement element, string name, double fallback)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDouble(out var number) && double.IsFinite(number) ? number : fallback;
+
+    private static double ReadNumber(JsonObject element, string name, double fallback)
+        => element[name]?.GetValue<double>() is double number && double.IsFinite(number) ? number : fallback;
 
     private static double ReadPositive(JsonElement element, string name, double fallback)
         => element.TryGetProperty(name, out var value)

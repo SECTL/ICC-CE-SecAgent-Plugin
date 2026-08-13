@@ -59,6 +59,13 @@ internal sealed class IccceVisualBridge
         if (TryReadEditableScene(svg, out var editableScene))
             return InsertEditableSceneGroup(window, canvas, editableScene, name, requestedWidth, requestedHeight, svgWidth, svgHeight);
 
+        if (SvgSceneImporter.TryImport(svg, out editableScene))
+            return InsertEditableSceneGroup(window, canvas, editableScene, name, requestedWidth, requestedHeight, svgWidth, svgHeight);
+
+        throw new ArgumentException("SVG 只支持可转换为 WPF 矢量的基础图元：path、rect、circle、ellipse、line、polyline、polygon、text。包含 foreignObject、复杂滤镜或脚本的 SVG 请先转换为路径。", nameof(svg));
+    }
+
+#if false
         var element = new SvgCanvasElement(svg)
         {
             Name = "svg_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"),
@@ -98,6 +105,7 @@ internal sealed class IccceVisualBridge
         };
     }
 
+#endif
     private static bool TryReadEditableScene(string svg, out JsonElement scene)
     {
         var match = Regex.Match(svg, "<metadata\\s+id\\s*=\\s*['\\\"]secagent-editable-scene['\\\"](?<attributes>[^>]*)>(?<scene>[^<]*)</metadata>", RegexOptions.IgnoreCase);

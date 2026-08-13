@@ -101,10 +101,10 @@ public sealed class SvgSceneElement : Border
     {
         if (rectangle.IsEmpty || !GetRenderedBounds(tolerance).IntersectsWith(rectangle)) return false;
 
-        // Browser-backed Mermaid and legacy TextBlock elements do not expose editable path
-        // data to WPF. Keep their existing whole-object fallback; generated Markdown text,
-        // rules and table borders use Path and receive true partial erasing below.
-        if (SceneKind == "svg" || Child is WebBrowser || Child is TextBlock)
+        // Legacy kind=svg and TextBlock elements are treated as one native scene unit.
+        // Generated Markdown text, rules and table borders use Path and receive true
+        // partial erasing below.
+        if (SceneKind == "svg" || Child is TextBlock)
         {
             Child = null;
             SerializeEmptyElement();
@@ -264,11 +264,11 @@ public sealed class SvgSceneElement : Border
     public bool HasVisualContent
         => (Child is Path path && path.Data is not null && !path.Data.Bounds.IsEmpty)
            || Child is Rectangle
-           || Child is WebBrowser
+           || (Child is Canvas canvas && canvas.Children.Count > 0)
            || (Child is TextBlock text && !string.IsNullOrWhiteSpace(text.Text));
 
     private bool UsesBoundsHitTest()
-        => Child is Rectangle || Child is TextBlock || Child is WebBrowser
+        => Child is Rectangle || Child is TextBlock || Child is Canvas
            || SceneKind == "path" || SceneKind == "line" || SceneKind == "rect" || SceneKind == "svg";
 
     private Rect ToChildLocalRectangle(Rect elementRectangle)
@@ -481,22 +481,28 @@ public sealed class SvgSceneElement : Border
         var svg = ReadString(element, "svg", "");
         if (string.IsNullOrWhiteSpace(svg)) return;
 
-        var browser = new WebBrowser
+        // Legacy kind=svg scenes are rendered into a native WPF Canvas. New scenes are
+        // expanded by SvgSceneGroup before reaching this method, but this keeps direct old
+        // history entries browser-free as well.
+        if (!SvgSceneImporter.TryImportElements(svg, out var imported)) return;
+        var nativeCanvas = new Canvas
         {
-            IsHitTestVisible = false,
-            Focusable = false,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch
+            Width = Width,
+            Height = Height,
+            Background = Brushes.Transparent,
+            IsHitTestVisible = false
         };
-        Child = browser;
-        Loaded += (_, _) => browser.NavigateToString(WrapSvgDocument(svg));
+        foreach (var node in imported.OfType<JsonObject>())
+        {
+            using var document = JsonDocument.Parse(node.ToJsonString());
+            var child = new SvgSceneElement(document.RootElement.Clone(), scale);
+            var position = ReadPosition(document.RootElement, scale);
+            Canvas.SetLeft(child, position.Left);
+            Canvas.SetTop(child, position.Top);
+            nativeCanvas.Children.Add(child);
+        }
+        Child = nativeCanvas;
     }
-
-    private static string WrapSvgDocument(string svg)
-        => "<!doctype html><html><head><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"></head>"
-         + "<body style=\"margin:0;padding:0;overflow:hidden;background:transparent;\">"
-         + svg
-         + "</body></html>";
 
     private void BuildLine(JsonElement element, double scale)
     {

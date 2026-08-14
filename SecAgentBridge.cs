@@ -27,9 +27,14 @@ internal sealed class SecAgentBridge : IDisposable
     private readonly IPluginHost _host;
     private readonly SettingsBridge _settings = new();
     private readonly IccceVisualBridge _visuals = new();
+    private readonly Func<IccceSvgCompatibilityStatus> _getSvgCompatibility;
     private CancellationTokenSource _cts;
 
-    public SecAgentBridge(IPluginHost host) => _host = host;
+    public SecAgentBridge(IPluginHost host, Func<IccceSvgCompatibilityStatus> getSvgCompatibility)
+    {
+        _host = host;
+        _getSvgCompatibility = getSvgCompatibility ?? throw new ArgumentNullException(nameof(getSvgCompatibility));
+    }
     public bool IsRunning => _cts is not null;
 
     public void Start()
@@ -68,7 +73,19 @@ internal sealed class SecAgentBridge : IDisposable
 
             if (context.Request.HttpMethod == "GET" && path == "/health")
             {
-                await WriteJsonAsync(context, 200, new JsonObject { ["apiVersion"] = 1, ["name"] = "iccce", ["version"] = "0.1.0", ["status"] = "ok" }, cancellationToken);
+                var compatibility = _getSvgCompatibility();
+                await WriteJsonAsync(context, 200, new JsonObject
+                {
+                    ["apiVersion"] = 1,
+                    ["name"] = "iccce",
+                    ["version"] = "0.1.0",
+                    ["status"] = "ok",
+                    ["capabilities"] = new JsonObject
+                    {
+                        ["insertSvg"] = compatibility.IsSupported,
+                        ["svg"] = compatibility.ToJson()
+                    }
+                }, cancellationToken);
                 return;
             }
 
@@ -104,18 +121,23 @@ internal sealed class SecAgentBridge : IDisposable
         await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
     }
 
-    private static JsonArray Tools() => new(
-        Tool(InsertSvgTool, "向当前白板插入一个 SVG 元素，插入后默认选中，可移动、等比例缩放和删除。", InsertSvgSchema()),
-        Tool(VersionTool, "获取 ICC-CE 当前版本、配置路径和运行状态。", EmptySchema()),
-        Tool(ListPathsTool, "列出 ICC-CE 可读写设置路径；可用 prefix 缩小范围。", PrefixSchema()),
-        Tool(ReadSettingsTool, "读取 ICC-CE Settings.json 或指定设置路径；默认隐藏敏感值。", ReadSchema()),
-        Tool(UpdateSettingsTool, "安全更新 ICC-CE 设置；更新前必须先读取目标字段。", UpdateSchema()),
-        Tool(CurrentScreenshotTool, "获取 ICC-CE 当前墨迹截图，可选择是否包含屏幕背景。", ScreenshotSchema()),
-        Tool(WhiteboardScreenshotTool, "获取指定 ICC-CE 白板页的墨迹截图，可选择是否包含屏幕背景。", WhiteboardScreenshotSchema()),
-        Tool(WhiteboardStatusTool, "获取 ICC-CE 白板当前页、总页数和可用操作。", EmptySchema()),
-        Tool(SwitchWhiteboardPageTool, "切换 ICC-CE 白板当前页，页码从 1 开始。", PageSchema()),
-        Tool(AddWhiteboardPageTool, "在当前页后新增一个 ICC-CE 白板页。", EmptySchema()),
-        Tool(DeleteWhiteboardPageTool, "删除 ICC-CE 白板当前页，至少保留一页。", EmptySchema()));
+    private JsonArray Tools()
+    {
+        var tools = new JsonArray();
+        if (_getSvgCompatibility().IsSupported)
+            tools.Add(Tool(InsertSvgTool, "向当前白板插入一个 SVG 元素，插入后默认选中，可移动、等比例缩放和删除。", InsertSvgSchema()));
+        tools.Add(Tool(VersionTool, "获取 ICC-CE 当前版本、配置路径和运行状态。", EmptySchema()));
+        tools.Add(Tool(ListPathsTool, "列出 ICC-CE 可读写设置路径；可用 prefix 缩小范围。", PrefixSchema()));
+        tools.Add(Tool(ReadSettingsTool, "读取 ICC-CE Settings.json 或指定设置路径；默认隐藏敏感值。", ReadSchema()));
+        tools.Add(Tool(UpdateSettingsTool, "安全更新 ICC-CE 设置；更新前必须先读取目标字段。", UpdateSchema()));
+        tools.Add(Tool(CurrentScreenshotTool, "获取 ICC-CE 当前墨迹截图，可选择是否包含屏幕背景。", ScreenshotSchema()));
+        tools.Add(Tool(WhiteboardScreenshotTool, "获取指定 ICC-CE 白板页的墨迹截图，可选择是否包含屏幕背景。", WhiteboardScreenshotSchema()));
+        tools.Add(Tool(WhiteboardStatusTool, "获取 ICC-CE 白板当前页、总页数和可用操作。", EmptySchema()));
+        tools.Add(Tool(SwitchWhiteboardPageTool, "切换 ICC-CE 白板当前页，页码从 1 开始。", PageSchema()));
+        tools.Add(Tool(AddWhiteboardPageTool, "在当前页后新增一个 ICC-CE 白板页。", EmptySchema()));
+        tools.Add(Tool(DeleteWhiteboardPageTool, "删除 ICC-CE 白板当前页，至少保留一页。", EmptySchema()));
+        return tools;
+    }
 
     private static JsonObject Tool(string name, string description, JsonObject schema) => new()
     {
@@ -218,9 +240,17 @@ internal sealed class SecAgentBridge : IDisposable
         SwitchWhiteboardPageTool => _visuals.SwitchWhiteboardPageAsync(ReadRequiredInt(arguments, "page")),
         AddWhiteboardPageTool => _visuals.AddWhiteboardPageAsync(),
         DeleteWhiteboardPageTool => _visuals.DeleteWhiteboardPageAsync(),
-        InsertSvgTool => _visuals.InsertSvgAsync(ReadRequiredString(arguments, "svg"), ReadString(arguments, "name"), ReadNullableDouble(arguments, "width"), ReadNullableDouble(arguments, "height")),
+        InsertSvgTool => InsertSvgIfSupportedAsync(arguments),
         _ => throw new ArgumentException($"未知工具：{name}")
     };
+
+    private Task<JsonNode> InsertSvgIfSupportedAsync(JsonElement arguments)
+    {
+        var compatibility = _getSvgCompatibility();
+        if (!compatibility.IsSupported)
+            throw new InvalidOperationException($"当前 CE 不支持 SVG 插入：{compatibility.Reason} 缺少：{string.Join("、", compatibility.MissingCapabilities)}");
+        return _visuals.InsertSvgAsync(ReadRequiredString(arguments, "svg"), ReadString(arguments, "name"), ReadNullableDouble(arguments, "width"), ReadNullableDouble(arguments, "height"));
+    }
 
     private static string ReadString(JsonElement args, string name) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

@@ -1,7 +1,7 @@
 {
   "Id": "inkcanvas.iccce.secagent",
   "Name": "ICC-CE HTTP Plugin",
-  "Version": "0.2.0",
+  "Version": "0.3.0",
   "Description": "为 SecAgent 连接插件提供 ICC-CE 普通 HTTP JSON 服务。",
   "Author": "SecAgent",
   "EntranceAssembly": "ICC-CE.SecAgent.Plugin.dll",

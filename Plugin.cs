@@ -43,10 +43,12 @@ public sealed class SecAgentController : IDisposable
     public SecAgentController(IPluginHost host)
     {
         _host = host;
-        _bridge = new SecAgentBridge(host);
+        _bridge = new SecAgentBridge(host, GetCompatibilityStatus);
     }
 
     public SecAgentRegistrationStatus GetStatus() => new(ServerUrl, _bridge.IsRunning);
+
+    internal IccceSvgCompatibilityStatus GetCompatibilityStatus() => IccceSvgCompatibility.Check(_host);
 
     public Task StartAsync()
     {
@@ -56,6 +58,10 @@ public sealed class SecAgentController : IDisposable
             _autoInstallCancellation = new CancellationTokenSource();
             _ = EnsureConnectorInstalledAsync(_autoInstallCancellation.Token);
             _host.Log($"ICC-CE HTTP 服务已启动：{ServerUrl}");
+            var compatibility = GetCompatibilityStatus();
+            _host.Log(compatibility.IsSupported
+                ? $"ICC-CE SVG 插入适配：可用（CE {compatibility.HostVersion}）"
+                : $"ICC-CE SVG 插入适配：不可用（CE {compatibility.HostVersion}，{compatibility.Reason}）");
         }
         catch (Exception ex)
         {

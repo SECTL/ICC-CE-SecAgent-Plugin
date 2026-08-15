@@ -3,4 +3,5 @@ obj/
 .obj/
 obj-build/
 bin-build/
+/build/
 .env

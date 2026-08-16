@@ -1,4 +1,4 @@
-# ICC-CE HTTP Plugin
+# SecAgent 联动
 
 ICC-CE 侧插件，为 SecAgent 连接插件提供普通 HTTP JSON 服务。它不实现 MCP，也不修改 SecAgent 工作区配置。
 

@@ -102,7 +102,7 @@ public sealed class SecAgentController : IDisposable
                     || ok.ValueKind != JsonValueKind.True)
                     throw new InvalidOperationException($"SecAgent Connector auto-install failed (HTTP {(int)installResponse.StatusCode}): {installBody}");
 
-                _host.Log("已请求 SecAgent 自动安装 ICC-CE Connector");
+                _host.Log("已请求 SecAgent 自动安装 ICC-CE 联动");
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
